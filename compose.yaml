@@ -1,0 +1,84 @@
+name: generation-service
+x-service: &service
+  build: .
+  environment: &environment
+    DATABASE_URL: postgresql+asyncpg://generation:demo-password@db:5432/generation
+    WEBHOOK_SECRET: ${WEBHOOK_SECRET:-demo-secret-change-me}
+    PROVIDER_TIMEOUT: ${PROVIDER_TIMEOUT:-60}
+    API_CALLBACK_BASE: http://api:8000
+    ALPHA_URL: http://alpha:8000
+    BETA_URL: http://beta:8000
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: generation
+      POSTGRES_PASSWORD: demo-password
+      POSTGRES_DB: generation
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U generation -d generation"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes: [postgres-data:/var/lib/postgresql/data]
+  migrate:
+    <<: *service
+    command: [alembic, upgrade, head]
+    depends_on:
+      db:
+        condition: service_healthy
+  api:
+    <<: *service
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  alpha:
+    <<: *service
+    command: [uvicorn, app.fake_provider:app, --host, 0.0.0.0, --port, '8000', --no-access-log]
+    environment:
+      <<: *environment
+      PROVIDER_NAME: alpha
+      FAKE_FAILURE_RATE: ${ALPHA_FAILURE_RATE:-0}
+      FAKE_ERROR_TYPE: ${ALPHA_ERROR_TYPE:-technical}
+      FAKE_POST_MODE: ${ALPHA_POST_MODE:-normal}
+      FAKE_DELAY_MIN: ${ALPHA_DELAY_MIN:-2}
+      FAKE_DELAY_MAX: ${ALPHA_DELAY_MAX:-20}
+      FAKE_DUPLICATES: ${ALPHA_DUPLICATES:-1}
+      FAKE_NO_WEBHOOK: ${ALPHA_NO_WEBHOOK:-false}
+  beta:
+    <<: *service
+    command: [uvicorn, app.fake_provider:app, --host, 0.0.0.0, --port, '8000', --no-access-log]
+    environment:
+      <<: *environment
+      PROVIDER_NAME: beta
+      FAKE_FAILURE_RATE: ${BETA_FAILURE_RATE:-0}
+      FAKE_ERROR_TYPE: ${BETA_ERROR_TYPE:-technical}
+      FAKE_POST_MODE: ${BETA_POST_MODE:-normal}
+      FAKE_DELAY_MIN: ${BETA_DELAY_MIN:-2}
+      FAKE_DELAY_MAX: ${BETA_DELAY_MAX:-20}
+      FAKE_DUPLICATES: ${BETA_DUPLICATES:-1}
+      FAKE_NO_WEBHOOK: ${BETA_NO_WEBHOOK:-false}
+  tests:
+    <<: *service
+    profiles: [test]
+    command: [pytest, -q]
+    environment:
+      <<: *environment
+      TEST_DATABASE_URL: postgresql+asyncpg://generation:demo-password@db:5432/generation
+      TEST_API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+volumes:
+  postgres-data:
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${COMPOSE_SUBNET:-10.246.81.0/24}
