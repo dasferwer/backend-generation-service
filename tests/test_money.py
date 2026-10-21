@@ -95,3 +95,30 @@ async def test_balance_order_and_database_guards(client, engine):
         async with engine.begin() as conn:
             await conn.execute(text("UPDATE users SET balance=999 WHERE id=1"))
     assert await invariant(engine) == 103
+
+
+async def test_concurrent_payment_conflicting_users(client, engine):
+    async with engine.begin() as conn:
+        await conn.execute(text("INSERT INTO users(id) VALUES(2)"))
+
+    async def request(i):
+        p = {"payment_id": "cross-user", "user_id": i + 1, "tokens": 9, "status": "succeeded"}
+        return await client.post("/webhooks/payments", **signed(p))
+
+    responses = await parallel(2, request)
+    assert sorted(r.status_code for r in responses) == [200, 409]
+    assert await invariant(engine, 1) + await invariant(engine, 2) == 109
+
+
+async def test_balance_and_ledger_share_snapshot(client, engine):
+    async def request(i):
+        if i % 2:
+            p = {"payment_id": str(i), "user_id": 1, "tokens": 1, "status": "succeeded"}
+            assert (await client.post("/webhooks/payments", **signed(p))).status_code == 200
+        else:
+            r = await client.get("/users/1/balance?limit=100")
+            assert r.status_code == 200
+            assert r.json()["balance"] == sum(row["amount"] for row in r.json()["ledger"])
+
+    await parallel(20, request)
+    assert await invariant(engine) == 110
