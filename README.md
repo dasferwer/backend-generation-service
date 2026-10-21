@@ -288,7 +288,7 @@ docker compose run --rm migrate alembic upgrade head
 Для следующей миграции, в локальном Python-окружении с установленными зависимостями:
 
 ```sh
-python3 -m venv .venv
+python3.11 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 alembic revision -m 'Описание изменения схемы'
